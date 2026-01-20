@@ -30,11 +30,15 @@ local lightSourceBuffer
 local starAttenuationTexture
 local starAttenuationShader
 
+local chunks
+local chunkStarCountBuffer
+local chunkStarCountData
+local chunkStarCountDataFFI
+
 local lightSourceData
 local lightSourceDataFFI
 
 local camera
-local pointIdSets
 
 local mode
 
@@ -136,11 +140,13 @@ local function getStarCount(average, variance) -- Average can be a float! This f
 	return ret
 end
 
-local function setStarData(id, ...)
+local function setStarData(index, ...)
+	assert(index >= 0 and index < consts.maxPoints, "Bad index " .. index .. " given to setLightSourceData, must be an int within [0, " .. consts.maxPoints .. ")")
+
 	local floatCount = select("#", ...)
-	assert(floatCount == consts.floatsPerLightSource, "Wrong argument count to setStarData")
+	assert(floatCount == consts.floatsPerLightSource, "Wrong argument count to setLightSourceData")
 	local bytesPerFloat = 4
-	local curAddr = id * lightSourceBuffer:getElementStride() / bytesPerFloat
+	local curAddr = index * lightSourceBuffer:getElementStride() / bytesPerFloat
 	for i = 1, floatCount do
 		local property = select(i, ...)
 		lightSourceDataFFI[curAddr] = property -- Casts from double to float
@@ -148,7 +154,9 @@ local function setStarData(id, ...)
 	end
 end
 
-local function generateChunk(chunkX, chunkY, chunkZ, pointIdStart, chunkId)
+local function generateChunk(chunkX, chunkY, chunkZ, chunkId, chunkBufferIndex)
+	local pointIdStart = chunkBufferIndex * consts.maxStarsPerChunk
+
 	starRNG:setSeed(chunkId)
 
 	local chunkCoord = vec3(chunkX, chunkY, chunkZ)
@@ -157,10 +165,6 @@ local function generateChunk(chunkX, chunkY, chunkZ, pointIdStart, chunkId)
 
 	local sample = getDensity(vec3.components(samplePosition))
 	local count = getStarCount(sample * consts.chunkVolume, consts.starCountVariance)
-	local chunk = {
-		idStart = pointIdStart,
-		pointCount = count
-	}
 	for i = 0, count - 1 do
 		local pointPositionX = chunkPosition.x + consts.chunkSize.x * starRNG:random()
 		local pointPositionY = chunkPosition.y + consts.chunkSize.y * starRNG:random()
@@ -179,10 +183,6 @@ local function generateChunk(chunkX, chunkY, chunkZ, pointIdStart, chunkId)
 		local intensityMultiplier = (starRNG:random() * 2 - 1) * 0.9 + 1
 		local intensity = consts.intensityPerPoint * intensityMultiplier
 
-		if pointIdStart + i >= consts.maxPoints then
-			-- Too many points!!
-			return chunk
-		end
 		setStarData(
 			pointIdStart + i,
 
@@ -195,18 +195,95 @@ local function generateChunk(chunkX, chunkY, chunkZ, pointIdStart, chunkId)
 			b
 		)
 	end
-	return chunk
+	if count > 0 then
+		lightSourceBuffer:setArrayData(lightSourceData, pointIdStart + 1, pointIdStart + 1, count)
+	end
+	return count
+end
+
+local function getBlockRanges(size, position, viewRadiusMultiplier)
+	viewRadiusMultiplier = viewRadiusMultiplier or 1
+	local viewRadius = consts.cloudFadeRadius * viewRadiusMultiplier
+	local minX, maxX = math.floor((position.x - viewRadius) / size.x), math.floor((position.x + viewRadius) / size.x)
+	local minY, maxY = math.floor((position.y - viewRadius) / size.y), math.floor((position.y + viewRadius) / size.y)
+	local minZ, maxZ = math.floor((position.z - viewRadius) / size.z), math.floor((position.z + viewRadius) / size.z)
+	return minX, maxX, minY, maxY, minZ, maxZ
+end
+
+local function iterateInRangeBlocks(size, position, func, viewRadiusMultiplier)
+	local minX, maxX, minY, maxY, minZ, maxZ = getBlockRanges(size, position, viewRadiusMultiplier)
+	for x = minX, maxX do
+		for y = minY, maxY do
+			for z = minZ, maxZ do
+				func(x, y, z)
+			end
+		end
+	end
+end
+
+local function handleChunkGeneration()
+	local generatedChunks = 0
+	local updateChunkStarCountBuffer = false
+
+	local minX, maxX, minY, maxY, minZ, maxZ = getGalaxyBoundingBoxChunks()
+	local widthChunks = maxX - minX + 1
+	local heightChunks = maxY - minY + 1
+	local depthChunks = maxZ - minZ + 1
+
+	local viewMinX, viewMaxX, viewMinY, viewMaxY, viewMinZ, viewMaxZ = getBlockRanges(consts.chunkSize, camera.position)
+	local chunkBufferStartRealX = math.floor(viewMinX / consts.chunkRange.x) * consts.chunkRange.x
+	local chunkBufferStartRealY = math.floor(viewMinY / consts.chunkRange.y) * consts.chunkRange.y
+	local chunkBufferStartRealZ = math.floor(viewMinZ / consts.chunkRange.z) * consts.chunkRange.z
+	local viewMinXInChunkBuffer = viewMinX % consts.chunkRange.x
+	local viewMinYInChunkBuffer = viewMinY % consts.chunkRange.y
+	local viewMinZInChunkBuffer = viewMinZ % consts.chunkRange.z
+	for x = 0, consts.chunkRange.x - 1 do
+		for y = 0, consts.chunkRange.y - 1 do
+			for z = 0, consts.chunkRange.z - 1 do
+				local realX = x + chunkBufferStartRealX + (x < viewMinXInChunkBuffer and consts.chunkRange.x or 0)
+				local realY = y + chunkBufferStartRealY + (y < viewMinYInChunkBuffer and consts.chunkRange.y or 0)
+				local realZ = z + chunkBufferStartRealZ + (z < viewMinZInChunkBuffer and consts.chunkRange.z or 0)
+
+				local currentChunk = chunks[x][y][z]
+				if
+					currentChunk.x ~= realX or
+					currentChunk.y ~= realY or
+					currentChunk.z ~= realZ
+				then
+					local x2, y2, z2 = x - minX, y - minY, z - minZ
+					local chunkId = x2 + y2 * widthChunks + z2 * heightChunks * depthChunks
+
+					local chunkBufferIndex = x + y * consts.chunkRange.x + z * consts.chunkRange.y * consts.chunkRange.x
+					if
+						minX <= x and x <= maxX and
+						minY <= y and y <= maxY and
+						minZ <= z and z <= maxZ
+					then
+						local chunkCount = generateChunk(realX, realY, realZ, chunkId, chunkBufferIndex)
+						generatedChunks = generatedChunks + 1
+						local chunk = chunks[x][y][z]
+						chunk.x = realX
+						chunk.y = realY
+						chunk.z = realZ
+						chunkStarCountDataFFI[chunkBufferIndex] = chunkCount
+						updateChunkStarCountBuffer = true
+					else
+						chunks[x][y][z] = {}
+						chunkStarCountDataFFI[chunkBufferIndex] = 0
+					end
+				end
+			end
+		end
+	end
+
+	if updateChunkStarCountBuffer then
+		chunkStarCountBuffer:setArrayData(chunkStarCountData, 1, 1, consts.chunksInRange)
+	end
+
+	return generatedChunks
 end
 
 local function loadPoints()
-	pointIdSets = {}
-	for i = 1, consts.maxPointIdSets do
-		pointIdSets[i] = {
-			i = i,
-			free = true
-		}
-	end
-
 	-- for chunkX = 0, consts.chunksPerAxis - 1 do
 	-- 	for chunkY = 0, consts.chunksPerAxis - 1 do
 	-- 		for chunkZ = 0, consts.chunksPerAxis - 1 do
@@ -236,28 +313,7 @@ local function blockInRange(size, x, y, z, viewRadiusMultiplier)
 		minZ <= z and z <= maxZ
 end
 
-local function iterateInRangeBlocks(size, func, viewRadiusMultiplier)
-	viewRadiusMultiplier = viewRadiusMultiplier or 1
-	local viewRadius = consts.cloudFadeRadius * viewRadiusMultiplier
-	local minX, maxX = math.floor((camera.position.x - viewRadius) / size.x), math.floor((camera.position.x + viewRadius) / size.x)
-	local minY, maxY = math.floor((camera.position.y - viewRadius) / size.y), math.floor((camera.position.y + viewRadius) / size.y)
-	local minZ, maxZ = math.floor((camera.position.z - viewRadius) / size.z), math.floor((camera.position.z + viewRadius) / size.z)
-	for x = minX, maxX do
-		for y = minY, maxY do
-			for z = minZ, maxZ do
-				func(x, y, z)
-			end
-		end
-	end
-end
-
 local function drawOutput()
-	local info = {
-		activePoints = 0,
-		activeChunks = 0,
-		activeSets = 0
-	}
-
 	love.graphics.setCanvas(outputCanvas)
 	love.graphics.clear(0, 0, 0, 1)
 
@@ -288,7 +344,6 @@ local function drawOutput()
 	end
 
 	if mode == "point" or mode == "both" then
-		love.graphics.setShader(starAttenuationShader)
 		sendGalaxyUniforms(starAttenuationShader)
 		starAttenuationShader:send("rayLength", consts.cloudFadeRadius)
 		starAttenuationShader:send("textureSize", {starAttenuationTexture:getWidth(), starAttenuationTexture:getHeight(), starAttenuationTexture:getDepth()})
@@ -307,31 +362,16 @@ local function drawOutput()
 		local cameraUp = mathsies.vec3.rotate(consts.upVector, camera.orientation)
 		local cameraRight = mathsies.vec3.rotate(consts.rightVector, camera.orientation)
 
-		local pointGroups = {}
-		for i, pointIdSet in ipairs(pointIdSets) do
-			if not pointIdSet.free then
-				local start = (i - 1) * consts.pointsPerIdSet
-				local count = pointIdSet.currentPoints
+		local pointGroups = {
+			{
+				start = 0,
+				count = consts.maxPoints
+			}
+		}
 
-				local finish = start + count
-				if finish > start + consts.pointsPerIdSet then
-					info.tooManyPoints = true
-					finish = math.min(start + consts.pointsPerIdSet, finish)
-					count = finish - start
-				end
-
-				if count > 0 then
-					table.insert(pointGroups, {
-						start = start,
-						count = count
-					})
-					info.activeSets = info.activeSets + 1
-					info.activePoints = info.activePoints + pointIdSet.currentPoints
-					info.activeChunks = info.activeChunks + pointIdSet.currentChunks
-				end
-			end
-		end
-
+		blurredPointPreparationShader:send("ChunkStarCounts", chunkStarCountBuffer)
+		blurredPointPreparationShader:send("chunksStart", 0) -- Where in the LightSources buffer is the first chunk
+		blurredPointPreparationShader:send("maxStarsPerChunk", consts.maxStarsPerChunk) -- How many light sources wide are the chunks in the LightSources buffer
 		blurredPointPreparationShader:send("LightSources", lightSourceBuffer)
 		blurredPointPreparationShader:send("Points", blurredPointBuffer)
 		blurredPointPreparationShader:send("fadeInRadius", consts.pointFadeRadius)
@@ -367,8 +407,6 @@ local function drawOutput()
 	love.graphics.setBlendMode("alpha")
 	love.graphics.setCanvas()
 	love.graphics.setShader()
-
-	return info
 end
 
 local function getAverage(modeName)
@@ -483,7 +521,9 @@ function love.load()
 			nebula.size.x, nebula.size.y, nebula.size.z,
 		})
 	end
-	nebulaeBuffer:setArrayData(bufferData)
+	if #nebulae > 0 then
+		nebulaeBuffer:setArrayData(bufferData)
+	end
 
 	createNebulaShader:send("nebulaeTexture", nebulaeTexture)
 	createNebulaShader:send("nebulaTextureResolution", consts.nebulaResolution)
@@ -494,8 +534,16 @@ function love.load()
 	for _, nebula in ipairs(nebulae) do
 		createNebulaShader:send("nebulaId", nebula.id)
 		createNebulaShader:send("nebulaPosition", {vec3.components(nebula.position)})
-		createNebulaShader:send("nebulaSize", {vec3.components(nebula.size)})
+		safeSend(createNebulaShader, "nebulaSize", {vec3.components(nebula.size)})
 		love.graphics.dispatchThreadgroups(createNebulaShader, countX, countY, countZ)
+	end
+
+	local bitsPerInt = 4 -- 32-bit, as in GLSL
+	chunkStarCountBuffer = love.graphics.newBuffer({{name = "count", format = "int32"}}, consts.chunksInRange, {shaderstorage = true})
+	chunkStarCountData = love.data.newByteData(bitsPerInt * consts.chunksInRange)
+	chunkStarCountDataFFI = ffi.cast("int32_t*", chunkStarCountData:getFFIPointer())
+	for i = 0, consts.chunksInRange - 1 do
+		chunkStarCountDataFFI[i] = 0
 	end
 
 	blurredPointPreparationShader = love.graphics.newComputeShader(
@@ -570,6 +618,18 @@ function love.load()
 	-- 	"#line 1\n" .. love.filesystem.read("shaders/init/initCloud.glsl")
 	-- )
 
+	chunks = {}
+	for x = 0, consts.chunkRange.x - 1 do
+		chunks[x] = {}
+		for y = 0, consts.chunkRange.y - 1 do
+			chunks[x][y] = {}
+			for z = 0, consts.chunkRange.z - 1 do
+				chunks[x][y][z] = {}
+			end
+		end
+	end
+	handleChunkGeneration()
+
 	local testing = false -- Not maintained
 	if not testing then
 		loadPoints()
@@ -642,30 +702,6 @@ end
 -- 	end
 -- end
 
-local function tryGenerateChunkIntoSet(set, x, y, z, id)
-	local chunks = set.chunks
-	chunks[x] = chunks[x] or {}
-	chunks[x][y] = chunks[x][y] or {}
-	if not chunks[x][y][z] then
-		local setStart = (set.i - 1) * consts.pointsPerIdSet
-		local chunkStart = setStart + set.currentPoints
-		local chunk = generateChunk(x, y, z, chunkStart, id)
-		chunks[x][y][z] = chunk
-		set.currentChunks = set.currentChunks + 1
-		set.currentPoints = set.currentPoints + chunk.pointCount
-
-		if chunk.pointCount > 0 then
-			if chunkStart + chunk.pointCount > setStart + consts.pointsPerIdSet then
-				-- Too many points!!
-				return false
-			else
-				lightSourceBuffer:setArrayData(lightSourceData, chunkStart + 1, chunkStart + 1, chunk.pointCount)
-				return true
-			end
-		end
-	end
-end
-
 function love.update(dt)
 	local translation = vec3()
 	if love.keyboard.isDown(consts.controls.moveRight) then
@@ -711,114 +747,19 @@ function love.update(dt)
 	local rotationQuat = quat.fromAxisAngle(util.limitVectorLength(rotation, camera.angularSpeed * dt))
 	camera.orientation = quat.normalise(camera.orientation * rotationQuat) -- Normalise to prevent numeric drift
 
-	local freePointIdSets = {}
-	for _, pointIdSet in ipairs(pointIdSets) do
-		if not pointIdSet.free and not blockInRange(consts.pointIdSetSize, pointIdSet.x, pointIdSet.y, pointIdSet.z, consts.pointSetFreeRangeMultiplier) then
-			pointIdSet.free = true
-			pointIdSet.x, pointIdSet.y, pointIdSet.z = nil, nil, nil
-			pointIdSet.currentChunks = nil
-			pointIdSet.currentPoints = nil
-			pointIdSet.chunks = nil
-		end
-
-		if pointIdSet.free then
-			table.insert(freePointIdSets, pointIdSet)
-		end
-	end
-
-	local minX, maxX, minY, maxY, minZ, maxZ = getGalaxyBoundingBoxChunks()
-	local widthChunks = maxX - minX + 1
-	local heightChunks = maxY - minY + 1
-	local depthChunks = maxZ - minZ + 1
-
-	iterateInRangeBlocks(consts.chunkSize, function(x, y, z)
-		if not (
-			minX <= x and x <= maxX and
-			minY <= y and y <= maxY and
-			minZ <= z and z <= maxZ
-		) then
-			return
-		end
-
-		local setX = math.floor(x / consts.pointIdSetSideLengthChunks)
-		local setY = math.floor(y / consts.pointIdSetSideLengthChunks)
-		local setZ = math.floor(z / consts.pointIdSetSideLengthChunks)
-
-		local set
-		for _, pointIdSet in ipairs(pointIdSets) do
-			if
-				not pointIdSet.free and
-				pointIdSet.x == setX and
-				pointIdSet.y == setY and
-				pointIdSet.z == setZ
-			then
-				set = pointIdSet
-			end
-		end
-
-		if not set then
-			set = table.remove(freePointIdSets)
-			if not set then
-				error("Out of point id sets!")
-			end
-
-			-- Claim
-			set.free = false
-			set.x = setX
-			set.y = setY
-			set.z = setZ
-			set.chunks = {}
-			set.currentChunks = 0
-			set.currentPoints = 0
-		end
-
-		local x2, y2, z2 = x - minX, y - minY, z - minZ
-		local chunkId = x2 + y2 * widthChunks + z2 * heightChunks * depthChunks
-		tryGenerateChunkIntoSet(set, x, y, z, chunkId)
-	end)
-
-	-- if love.keyboard.isDown("space") then
-	-- 	for _, set in ipairs(pointIdSets) do
-	-- 		if not set.free then
-	-- 			for ox = 0, consts.pointIdSetSideLengthChunks - 1 do
-	-- 				for oy = 0, consts.pointIdSetSideLengthChunks - 1 do
-	-- 					for oz = 0, consts.pointIdSetSideLengthChunks - 1 do
-	-- 						local x = ox + set.x * consts.pointIdSetSideLengthChunks
-	-- 						local y = oy + set.y * consts.pointIdSetSideLengthChunks
-	-- 						local z = oz + set.z * consts.pointIdSetSideLengthChunks
-
-	-- 						tryGenerateChunkIntoSet(set, x, y, z)
-	-- 					end
-	-- 				end
-	-- 			end
-	-- 		end
-	-- 	end
-	-- end
+	handleChunkGeneration()
 end
 
 function love.draw()
-	local info = drawOutput()
+	drawOutput()
 	love.graphics.draw(outputCanvas, 0, 0, 0, 1 / canvasScale)
-
-	local idSetInfoTable = {}
-	for i, idSet in ipairs(pointIdSets) do
-		if idSet.free then
-			idSetInfoTable[i] = "-"
-		else
-			local proportion = idSet.currentChunks / consts.chunksPerIdPointSet
-			idSetInfoTable[i] = math.floor(proportion * 100 + 0.5) .. "%"
-			local proportion = idSet.currentPoints / consts.pointsPerIdSet
-			idSetInfoTable[i] = idSetInfoTable[i] .. " " .. math.floor(proportion * 100 + 0.5) .. "%"
-		end
+	local activePoints = 0
+	for i = 0, consts.chunksInRange - 1 do
+		activePoints = activePoints + chunkStarCountDataFFI[i]
 	end
 	love.graphics.print(
 		love.timer.getFPS() .. "\n" ..
-		info.activePoints .. "\n" ..
-		info.activeChunks .. "\n" ..
-		info.activeSets .. "\n" ..
-		"\n" ..
-		(info.tooManyPoints and "Too many points in the id sets! Not drawing all of them..." or "") .. "\n" ..
-		"\n" ..
-		table.concat(idSetInfoTable, "\n") .. "\n"
+		activePoints .. "\n" ..
+		consts.maxPoints
 	)
 end

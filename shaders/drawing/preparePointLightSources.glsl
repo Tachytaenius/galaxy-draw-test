@@ -1,3 +1,9 @@
+readonly buffer ChunkStarCounts {
+	int chunkStarCounts[];
+};
+uniform int maxStarsPerChunk;
+uniform int chunksStart;
+
 struct LightSource {
 	vec3 position;
 	float luminousIntensity;
@@ -56,9 +62,16 @@ void computemain() {
 	textureSamplePos.z = dist / fadeOutRadius;
 	float transmittance = Texel(starAttenuationTexture, textureSamplePos).r;
 
+	bool skip =
+		i == skipIndex ||
+		maxStarsPerChunk >= 0 &&
+			(int(i) - chunksStart) % maxStarsPerChunk >= chunkStarCounts[
+				(int(i) - chunksStart) / maxStarsPerChunk
+			];
+
 	Point point = Point (
 		direction,
-		i == skipIndex ? vec3(0.0) : transmittance * incomingLightPreExtinction
+		skip ? vec3(0.0) : transmittance * incomingLightPreExtinction
 	);
 	points[i] = point;
 }

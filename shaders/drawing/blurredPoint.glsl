@@ -54,7 +54,8 @@ void vertexmain() {
 	}
 	vec3 billboardUp = cross(direction, billboardRight);
 	vec3 centre = direction * (1.0 - diskDistanceToSphere);
-	vec3 celestialSpherePos = centre + scale * (billboardRight * VertexPosition.x + billboardUp * VertexPosition.y);
+	float effectiveScale = colour == vec3(0.0) ? 0.0 : scale; // Draw no fragments if no brightness
+	vec3 celestialSpherePos = centre + effectiveScale * (billboardRight * VertexPosition.x + billboardUp * VertexPosition.y);
 	gl_Position = worldToClip * vec4(celestialSpherePos, 1.0);
 }
 
@@ -65,9 +66,6 @@ void vertexmain() {
 out vec4 outColour;
 
 void pixelmain() {
-	if (colour == vec3(0.0)) {
-		discard;
-	}
 	// float fadeMultiplier = 1.0 - fade;
 	outColour = vec4(colour / diskArea, 1.0);
 }

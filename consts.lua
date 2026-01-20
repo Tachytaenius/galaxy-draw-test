@@ -45,24 +45,24 @@ consts.stellarDensityMultiplier = 7.5
 
 consts.chunkSize = vec3(4)
 consts.pointSetFreeRangeMultiplier = 1.2 -- Must be >= 1
-consts.pointIdSetSideLengthChunks = 10
 consts.intensityPerPoint = 0.0001
 consts.diskMeshVertices = 5
 consts.pointLightBlurAngularRadius = 0.005
 -- Derived
 consts.chunkVolume = consts.chunkSize.x * consts.chunkSize.y * consts.chunkSize.z
-consts.pointIdSetSize = consts.chunkSize * consts.pointIdSetSideLengthChunks
-consts.chunksPerIdPointSet = consts.pointIdSetSideLengthChunks ^ 3
 consts.maxStarsPerChunk = consts.chunkVolume * (1 + consts.starCountVariance) * consts.stellarDensityMultiplier + 1 -- + 1 for the random in getStarCount, just in case
-consts.pointsPerIdSetMultiplier = 0.5 -- At the galactic core (highest star count), not all of each point id set is used. Save VRAM by assuming we will use less points than we would if every chunk had full density and they were all loaded.
-consts.pointsPerIdSet = consts.chunksPerIdPointSet * consts.maxStarsPerChunk * consts.pointsPerIdSetMultiplier
 
 consts.pointFadeRadius = 17
 consts.cloudFadeRadius = 18
 
-consts.maxPointIdSets = 8 -- Should be made to be derived from cloudFadeRadius, pointsPerIdSet, highest number of point id sets that can be in view, etc
 -- Derived
-consts.maxPoints = consts.maxPointIdSets * consts.pointsPerIdSet
+consts.chunkRange = vec3(
+	math.ceil(consts.cloudFadeRadius * 2 / consts.chunkSize.x) + 1,
+	math.ceil(consts.cloudFadeRadius * 2 / consts.chunkSize.y) + 1,
+	math.ceil(consts.cloudFadeRadius * 2 / consts.chunkSize.z) + 1
+)
+consts.chunksInRange = consts.chunkRange.x * consts.chunkRange.y * consts.chunkRange.z
+consts.maxPoints = consts.chunksInRange * consts.maxStarsPerChunk
 
 consts.blurredPointVertexFormat = {
 	{name = "VertexPosition", location = 0, format = "floatvec2"},
