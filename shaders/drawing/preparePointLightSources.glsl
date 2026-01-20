@@ -21,6 +21,16 @@ writeonly buffer Points {
 	Point points[];
 };
 
+struct IndirectDrawArgs {
+	uint vertexCount;
+	uint instanceCount;
+	uint baseVertex;
+	uint baseInstance;
+};
+buffer IndirectDrawBuffer {
+	IndirectDrawArgs indirectDrawBuffer[];
+};
+
 uniform uint pointStart;
 uniform uint pointCount;
 uniform uint skipIndex;
@@ -30,6 +40,9 @@ uniform sampler3D starAttenuationTexture;
 
 uniform float fadeInRadius;
 uniform float fadeOutRadius;
+
+uniform vec3 cameraForwards;
+uniform float minDot;
 
 vec3 perspectiveDivide(vec4 v) {
 	return v.xyz / v.w;
@@ -42,12 +55,31 @@ void computemain() {
 		return;
 	}
 
+	if (i == skipIndex) {
+		return;
+	}
+
+	if (
+		maxStarsPerChunk >= 0 &&
+		(int(i) - chunksStart) % maxStarsPerChunk >= chunkStarCounts[
+			(int(i) - chunksStart) / maxStarsPerChunk
+		]
+	) {
+		return;
+	}
+
 	LightSource lightSource = lightSources[i];
 	vec3 difference = lightSource.position - cameraPosition;
+
 	float dist = length(difference);
+	vec3 direction = difference / dist;
+
+	float dotResult = dot(cameraForwards, direction);
+	if (dotResult < minDot) {
+		return;
+	}
 
 	float dist2 = dist * dist;
-	vec3 direction = difference / dist;
 
 	float pointFadeMultiplier = clamp(
 		1.0 - (dist - fadeInRadius) / (fadeOutRadius - fadeInRadius),
@@ -62,16 +94,10 @@ void computemain() {
 	textureSamplePos.z = dist / fadeOutRadius;
 	float transmittance = Texel(starAttenuationTexture, textureSamplePos).r;
 
-	bool skip =
-		i == skipIndex ||
-		maxStarsPerChunk >= 0 &&
-			(int(i) - chunksStart) % maxStarsPerChunk >= chunkStarCounts[
-				(int(i) - chunksStart) / maxStarsPerChunk
-			];
-
 	Point point = Point (
 		direction,
-		skip ? vec3(0.0) : transmittance * incomingLightPreExtinction
+		transmittance * incomingLightPreExtinction
 	);
-	points[i] = point;
+	uint pointsIndex = atomicAdd(indirectDrawBuffer[0].instanceCount, 1);
+	points[pointsIndex] = point;
 }

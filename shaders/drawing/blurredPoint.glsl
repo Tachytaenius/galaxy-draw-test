@@ -67,7 +67,8 @@ out vec4 outColour;
 
 void pixelmain() {
 	// float fadeMultiplier = 1.0 - fade;
-	outColour = vec4(colour / diskArea, 1.0);
+	float fadeMultiplier = 1.0;
+	outColour = fadeMultiplier * vec4(colour / diskArea, 1.0);
 }
 
 #endif

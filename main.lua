@@ -12,6 +12,8 @@ local mat4 = mathsies.mat4
 local consts = require("consts")
 
 local outputCanvas
+local starCanvas
+
 local dummyTexture
 
 local cloudShader
@@ -29,6 +31,7 @@ local blurredPointBuffer
 local lightSourceBuffer
 local starAttenuationTexture
 local starAttenuationShader
+local pointIndirectDrawArgsBuffer
 
 local chunks
 local chunkStarCountBuffer
@@ -44,11 +47,9 @@ local mode
 
 local starRNG
 
-local canvasScale = 1
-
 -- TODO: Move all to consts...
-local squashAmount = 0.04
-local nebulaSquashAmount = 0.04
+local squashAmount = 0.03
+local nebulaSquashAmount = 0.03
 local galaxyRadius = 900
 local haloProportion = 0.0005
 local galaxyForwards = vec3(0, 1, 0)
@@ -314,12 +315,13 @@ local function blockInRange(size, x, y, z, viewRadiusMultiplier)
 end
 
 local function drawOutput()
-	love.graphics.setCanvas(outputCanvas)
+	love.graphics.setCanvas(starCanvas)
 	love.graphics.clear(0, 0, 0, 1)
 
 	local worldToCameraStationary = mat4.camera(vec3(), camera.orientation)
+	local aspectRatio = outputCanvas:getWidth() / outputCanvas:getHeight()
 	local cameraToClip = mat4.perspectiveLeftHanded(
-		outputCanvas:getWidth() / outputCanvas:getHeight(),
+		aspectRatio,
 		camera.verticalFOV,
 		camera.farPlaneDistance,
 		camera.nearPlaneDistance
@@ -340,7 +342,7 @@ local function drawOutput()
 		cloudShader:send("rayLength", consts.rayLength)
 		cloudShader:send("rayStepCount", consts.rayStepCount)
 		cloudShader:send("nebulaStepCount", consts.nebulaStepCount)
-		love.graphics.draw(dummyTexture, 0, 0, 0, outputCanvas:getDimensions())
+		love.graphics.draw(dummyTexture, 0, 0, 0, love.graphics.getCanvas():getDimensions())
 	end
 
 	if mode == "point" or mode == "both" then
@@ -369,6 +371,18 @@ local function drawOutput()
 			}
 		}
 
+		pointIndirectDrawArgsBuffer:setArrayData({
+			diskMesh:getVertexCount(),
+			0, -- This gets incremented (on the GPU)
+			0,
+			0
+		})
+
+		local diagonalFOV = camera.verticalFOV * math.sqrt(1 ^ 2 + aspectRatio ^ 2) -- Angular distance from camera forwards at corners of screen
+		local maxAngleFromCentre = diagonalFOV / 2 + consts.pointLightBlurAngularRadius
+		blurredPointPreparationShader:send("minDot", math.cos(maxAngleFromCentre))
+		blurredPointPreparationShader:send("cameraForwards", {vec3.components(vec3.rotate(consts.forwardVector, camera.orientation))})
+		blurredPointPreparationShader:send("IndirectDrawBuffer", pointIndirectDrawArgsBuffer)
 		blurredPointPreparationShader:send("ChunkStarCounts", chunkStarCountBuffer)
 		blurredPointPreparationShader:send("chunksStart", 0) -- Where in the LightSources buffer is the first chunk
 		blurredPointPreparationShader:send("maxStarsPerChunk", consts.maxStarsPerChunk) -- How many light sources wide are the chunks in the LightSources buffer
@@ -400,13 +414,18 @@ local function drawOutput()
 		love.graphics.setBlendMode("add")
 		for _, group in ipairs(pointGroups) do
 			blurredPointInstanceShader:send("pointStart", group.start)
-			love.graphics.drawInstanced(diskMesh, group.count)
+			love.graphics.drawIndirect(diskMesh, pointIndirectDrawArgsBuffer, 1)
 		end
 	end
 
 	love.graphics.setBlendMode("alpha")
-	love.graphics.setCanvas()
 	love.graphics.setShader()
+
+	love.graphics.setCanvas(outputCanvas)
+	love.graphics.clear()
+	love.graphics.draw(starCanvas, 0, 0, 0, outputCanvas:getWidth() / starCanvas:getWidth(), outputCanvas:getHeight() / starCanvas:getHeight())
+
+	love.graphics.setCanvas()
 end
 
 local function getAverage(modeName)
@@ -461,8 +480,8 @@ function love.load()
 
 	camera = {
 		-- position = consts.volumetricTextureSizeSpace / 2,
-		position = vec3(galaxyRadius / 2, 0, galaxyRadius / 2),
-		-- position = vec3(),
+		-- position = vec3(galaxyRadius / 2, 0, galaxyRadius / 2),
+		position = vec3(),
 		-- position = vec3.clone(nebulae[1].position),
 		-- orientation = quat.fromAxisAngle(vec3(0, consts.tau / 2, 0)),
 		orientation = quat(),
@@ -476,7 +495,9 @@ function love.load()
 	starRNG = love.math.newRandomGenerator()
 
 	dummyTexture = love.graphics.newImage(love.image.newImageData(1, 1))
-	outputCanvas = love.graphics.newCanvas(love.graphics.getWidth() * canvasScale, love.graphics.getHeight() * canvasScale, {format = "rgba32f"})
+	starCanvas = love.graphics.newCanvas(math.floor(love.graphics.getWidth() * consts.starCanvasScale), math.floor(love.graphics.getHeight() * consts.starCanvasScale), {format = "rgba32f"})
+	starCanvas:setFilter("nearest", "nearest")
+	outputCanvas = love.graphics.newCanvas(love.graphics.getWidth(), love.graphics.getHeight(), {format = "rgba32f"})
 	local attenuationTextureScale = 0.25
 	starAttenuationTexture = love.graphics.newCanvas(
 		math.floor(love.graphics.getWidth() * attenuationTextureScale),
@@ -618,6 +639,8 @@ function love.load()
 	-- 	"#line 1\n" .. love.filesystem.read("shaders/init/initCloud.glsl")
 	-- )
 
+	pointIndirectDrawArgsBuffer = love.graphics.newBuffer(consts.indirectDrawBufferFormat, 1, {shaderstorage = true, indirectarguments = true})
+
 	chunks = {}
 	for x = 0, consts.chunkRange.x - 1 do
 		chunks[x] = {}
@@ -752,7 +775,7 @@ end
 
 function love.draw()
 	drawOutput()
-	love.graphics.draw(outputCanvas, 0, 0, 0, 1 / canvasScale)
+	love.graphics.draw(outputCanvas, 0, 0, 0, 1)
 	local activePoints = 0
 	for i = 0, consts.chunksInRange - 1 do
 		activePoints = activePoints + chunkStarCountDataFFI[i]

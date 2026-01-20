@@ -50,10 +50,12 @@ consts.diskMeshVertices = 5
 consts.pointLightBlurAngularRadius = 0.005
 -- Derived
 consts.chunkVolume = consts.chunkSize.x * consts.chunkSize.y * consts.chunkSize.z
-consts.maxStarsPerChunk = consts.chunkVolume * (1 + consts.starCountVariance) * consts.stellarDensityMultiplier + 1 -- + 1 for the random in getStarCount, just in case
+consts.maxStarsPerChunk = math.ceil(consts.chunkVolume * (1 + consts.starCountVariance) * consts.stellarDensityMultiplier) + 1 -- + 1 for the random in getStarCount, just in case
 
-consts.pointFadeRadius = 17
-consts.cloudFadeRadius = 18
+consts.starCanvasScale = 1
+
+consts.pointFadeRadius = 22
+consts.cloudFadeRadius = 24
 
 -- Derived
 consts.chunkRange = vec3(
@@ -78,10 +80,15 @@ consts.lightSourceBufferFormat = {
 	{name = "colour", format = "floatvec3"}
 }
 consts.floatsPerLightSource = 7 -- Must match above
-
 consts.nebulaeBufferFormat = {
 	{name = "position", format = "floatvec3"},
 	{name = "size", format = "floatvec3"}
+}
+consts.indirectDrawBufferFormat = {
+	{name = "vertexCount", format = "uint32"},
+	{name = "instanceCount", format = "uint32"},
+	{name = "baseVertex", format = "uint32"},
+	{name = "baseInstance", format = "uint32"}
 }
 
 -- Derived

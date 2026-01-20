@@ -1,19 +1,24 @@
 local consts = require("consts")
 
 return function(segments, noFade)
-	local vertices = {
-		{
-			-- No z
-			0, 0, -- 0,
-			0 -- This is VertexFade
-		}
+	local centreVertex = {
+		-- No z
+		0, 0, -- 0,
+		0 -- This is VertexFade
 	}
-	for i = 0, segments do
+	local edgeVertices = {} -- Starts at 0
+	for i = 0, segments - 1 do
 		local angle = consts.tau * i / segments
-		vertices[#vertices + 1] = {
+		edgeVertices[i] = {
 			math.cos(angle), math.sin(angle), -- 0,
 			noFade and 0 or 1
 		}
 	end
-	return love.graphics.newMesh(consts.blurredPointVertexFormat, vertices, "fan")
+	local vertices = {}
+	for i = 0, segments - 1 do
+		vertices[#vertices+1] = edgeVertices[i]
+		vertices[#vertices+1] = edgeVertices[(i + 1) % segments]
+		vertices[#vertices+1] = centreVertex
+	end
+	return love.graphics.newMesh(consts.blurredPointVertexFormat, vertices, "triangles"), #vertices
 end
