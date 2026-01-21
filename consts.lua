@@ -53,6 +53,7 @@ consts.chunkVolume = consts.chunkSize.x * consts.chunkSize.y * consts.chunkSize.
 consts.maxStarsPerChunk = math.ceil(consts.chunkVolume * (1 + consts.starCountVariance) * consts.stellarDensityMultiplier) + 1 -- + 1 for the random in getStarCount, just in case
 
 consts.starCanvasScale = 1
+consts.cloudCanvasScale = 1
 
 consts.pointFadeRadius = 22
 consts.cloudFadeRadius = 24

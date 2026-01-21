@@ -13,6 +13,7 @@ local consts = require("consts")
 
 local outputCanvas
 local starCanvas
+local cloudCanvas
 
 local dummyTexture
 
@@ -315,9 +316,6 @@ local function blockInRange(size, x, y, z, viewRadiusMultiplier)
 end
 
 local function drawOutput()
-	love.graphics.setCanvas(starCanvas)
-	love.graphics.clear(0, 0, 0, 1)
-
 	local worldToCameraStationary = mat4.camera(vec3(), camera.orientation)
 	local aspectRatio = outputCanvas:getWidth() / outputCanvas:getHeight()
 	local cameraToClip = mat4.perspectiveLeftHanded(
@@ -330,6 +328,9 @@ local function drawOutput()
 	local clipToSky = mat4.inverse(skyToClip)
 
 	if mode == "cloud" or mode == "both" then
+		love.graphics.setCanvas(cloudCanvas)
+		love.graphics.clear()
+
 		love.graphics.setShader(cloudShader)
 		sendGalaxyUniforms(cloudShader)
 		cloudShader:send("fadeInRadius", consts.pointFadeRadius)
@@ -346,6 +347,9 @@ local function drawOutput()
 	end
 
 	if mode == "point" or mode == "both" then
+		love.graphics.setCanvas(starCanvas)
+		love.graphics.clear(0, 0, 0, 1)
+
 		sendGalaxyUniforms(starAttenuationShader)
 		starAttenuationShader:send("rayLength", consts.cloudFadeRadius)
 		starAttenuationShader:send("textureSize", {starAttenuationTexture:getWidth(), starAttenuationTexture:getHeight(), starAttenuationTexture:getDepth()})
@@ -418,13 +422,15 @@ local function drawOutput()
 		end
 	end
 
-	love.graphics.setBlendMode("alpha")
+	love.graphics.setBlendMode("add")
 	love.graphics.setShader()
 
 	love.graphics.setCanvas(outputCanvas)
-	love.graphics.clear()
+	love.graphics.clear(0, 0, 0, 1)
+	love.graphics.draw(cloudCanvas, 0, 0, 0, outputCanvas:getWidth() / cloudCanvas:getWidth(), outputCanvas:getHeight() / cloudCanvas:getHeight())
 	love.graphics.draw(starCanvas, 0, 0, 0, outputCanvas:getWidth() / starCanvas:getWidth(), outputCanvas:getHeight() / starCanvas:getHeight())
 
+	love.graphics.setBlendMode("alpha")
 	love.graphics.setCanvas()
 end
 
@@ -495,8 +501,9 @@ function love.load()
 	starRNG = love.math.newRandomGenerator()
 
 	dummyTexture = love.graphics.newImage(love.image.newImageData(1, 1))
-	starCanvas = love.graphics.newCanvas(math.floor(love.graphics.getWidth() * consts.starCanvasScale), math.floor(love.graphics.getHeight() * consts.starCanvasScale), {format = "rgba32f"})
-	starCanvas:setFilter("nearest", "nearest")
+	starCanvas = love.graphics.newCanvas(math.floor(love.graphics.getWidth() * consts.starCanvasScale), math.floor(love.graphics.getHeight() * consts.starCanvasScale), {format = "rgba16f"})
+	-- starCanvas:setFilter("nearest", "nearest")
+	cloudCanvas = love.graphics.newCanvas(math.floor(love.graphics.getWidth() * consts.cloudCanvasScale), math.floor(love.graphics.getHeight() * consts.cloudCanvasScale), {format = "rgba16f"})
 	outputCanvas = love.graphics.newCanvas(love.graphics.getWidth(), love.graphics.getHeight(), {format = "rgba32f"})
 	local attenuationTextureScale = 0.25
 	starAttenuationTexture = love.graphics.newCanvas(
