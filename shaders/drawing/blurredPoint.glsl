@@ -2,7 +2,7 @@
 
 const float tau = 6.28318530717958647692528676655900576839433879875021164194988918461563281257241799725606965068423413; // Thanks OEIS
 
-// Assumes additive mode
+// Assumes additive mode on a canvas with float colours
 
 varying float fade;
 varying vec3 colour;
@@ -30,7 +30,7 @@ uniform vec3 incomingLight;
 
 uniform vec3 cameraUp;
 uniform vec3 cameraRight;
-uniform mat4 worldToClip;
+uniform mat4 skyToClip;
 
 layout (location = 0) in vec2 VertexPosition;
 layout (location = 1) in float VertexFade;
@@ -56,7 +56,7 @@ void vertexmain() {
 	vec3 centre = direction * (1.0 - diskDistanceToSphere);
 	float effectiveScale = colour == vec3(0.0) ? 0.0 : scale; // Draw no fragments if no brightness
 	vec3 celestialSpherePos = centre + effectiveScale * (billboardRight * VertexPosition.x + billboardUp * VertexPosition.y);
-	gl_Position = worldToClip * vec4(celestialSpherePos, 1.0);
+	gl_Position = skyToClip * vec4(celestialSpherePos, 1.0);
 }
 
 #endif

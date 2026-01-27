@@ -74,7 +74,7 @@ VolumetricSample sampleGalaxyWithoutNebulae(vec3 samplePosition) {
 	vec3 colour = vec3(1.0);
 	vec3 emission = colour * intensityPerStar * stellarDensity;
 
-	float attenuationNoise = 0.0;
+	float attenuationNoise = 1.0;
 	float attenuation = attenuationMultiplier * attenuationNoise * densityMultiplier;
 
 	return VolumetricSample (

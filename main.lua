@@ -128,15 +128,16 @@ local function sendGalaxyUniforms(shader)
 	safeSend(shader, "coreProportion", coreProportion)
 	safeSend(shader, "coreFullProportion", coreFullProportion)
 	safeSend(shader, "armCount", armCount)
+	safeSend(shader, "attenuationMultiplier", 0.0001)
 
 	safeSend(shader, "nebulaCount", #nebulae)
 	safeSend(shader, "nebulaeTexture", nebulaeTexture)
 	safeSend(shader, "Nebulae", nebulaeBuffer)
 end
 
-local function getStarCount(average, variance) -- Average can be a float! This function is uniform-ish. It returns numbers with the desired average
+local function getStarCount(average, variance, rng) -- Average can be a float! This function is uniform-ish. It returns numbers with the desired average
 	local ret = math.floor(util.randomRange(1 - variance, (1 + variance)) * average)
-	if love.math.random() < average % 1 then -- Use fractional part of average as a probability
+	if rng:random() < average % 1 then -- Use fractional part of average as a probability
 		ret = ret + 1
 	end
 	return ret
@@ -156,7 +157,7 @@ local function setStarData(index, ...)
 	end
 end
 
-local function generateChunk(chunkX, chunkY, chunkZ, chunkId, chunkBufferIndex)
+local function generateChunk(chunkX, chunkY, chunkZ, chunkId, chunkBufferX, chunkBufferY, chunkBufferZ, chunkBufferIndex)
 	local pointIdStart = chunkBufferIndex * consts.maxStarsPerChunk
 
 	starRNG:setSeed(chunkId)
@@ -166,7 +167,7 @@ local function generateChunk(chunkX, chunkY, chunkZ, chunkId, chunkBufferIndex)
 	local samplePosition = chunkPosition + 0.5 * consts.chunkSize
 
 	local sample = getDensity(vec3.components(samplePosition))
-	local count = getStarCount(sample * consts.chunkVolume, consts.starCountVariance)
+	local count = getStarCount(sample * consts.chunkVolume, consts.starCountVariance, starRNG)
 	for i = 0, count - 1 do
 		local pointPositionX = chunkPosition.x + consts.chunkSize.x * starRNG:random()
 		local pointPositionY = chunkPosition.y + consts.chunkSize.y * starRNG:random()
@@ -261,7 +262,7 @@ local function handleChunkGeneration()
 						minY <= y and y <= maxY and
 						minZ <= z and z <= maxZ
 					then
-						local chunkCount = generateChunk(realX, realY, realZ, chunkId, chunkBufferIndex)
+						local chunkCount = generateChunk(realX, realY, realZ, chunkId, x, y, z, chunkBufferIndex)
 						generatedChunks = generatedChunks + 1
 						local chunk = chunks[x][y][z]
 						chunk.x = realX
@@ -413,7 +414,7 @@ local function drawOutput()
 		blurredPointInstanceShader:send("diskArea", diskArea)
 		blurredPointInstanceShader:send("cameraUp", {mathsies.vec3.components(cameraUp)})
 		blurredPointInstanceShader:send("cameraRight", {mathsies.vec3.components(cameraRight)})
-		blurredPointInstanceShader:send("worldToClip", {mathsies.mat4.components(cameraToClip * mat4.camera(vec3(), camera.orientation))})
+		blurredPointInstanceShader:send("skyToClip", {mathsies.mat4.components(skyToClip)})
 		love.graphics.setShader(blurredPointInstanceShader)
 		love.graphics.setBlendMode("add")
 		for _, group in ipairs(pointGroups) do
@@ -722,15 +723,29 @@ function love.load()
 	print("done, average ratio:", total / num)
 end
 
--- function love.keypressed(key)
--- 	if key == "space" then
--- 		if mode == "point" then
--- 			mode = "cloud"
--- 		else
--- 			mode = "point"
--- 		end
--- 	end
--- end
+function love.keypressed(key)
+	if key == "space" then
+		local prevChunkSize = consts.chunkSize
+		consts.chunkSize = consts.chunkSize * 2048
+		local total = 0
+		local minX, maxX, minY, maxY, minZ, maxZ = getGalaxyBoundingBoxChunks()
+		for x = minX, maxX do
+			print(x - minX, maxX - minX)
+			for y = minY, maxY do
+				for z = minZ, maxZ do
+					local chunkCoord = vec3(x, y, z)
+					local chunkPosition = chunkCoord * consts.chunkSize
+					local samplePosition = chunkPosition + 0.5 * consts.chunkSize
+					local sample = getDensity(vec3.components(samplePosition))
+					local count = getStarCount(sample * consts.chunkVolume, consts.starCountVariance, starRNG)
+					total = total + count
+				end
+			end
+		end
+		print("total stars: " .. total)
+		consts.chunkSize = prevChunkSize
+	end
+end
 
 function love.update(dt)
 	local translation = vec3()
