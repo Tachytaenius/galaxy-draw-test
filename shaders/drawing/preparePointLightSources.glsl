@@ -37,6 +37,8 @@ uniform uint skipIndex;
 uniform vec3 cameraPosition;
 uniform mat4 skyToClip;
 uniform sampler3D starAttenuationTexture;
+uniform ivec3 chunkBufferSize;
+uniform vec3 viewMinFloatLocationInChunkBuffer;
 
 uniform float fadeInRadius;
 uniform float fadeOutRadius;
@@ -46,6 +48,14 @@ uniform float minDot;
 
 vec3 perspectiveDivide(vec4 v) {
 	return v.xyz / v.w;
+}
+
+ivec3 bvecToIvec(bvec3 v) {
+	return ivec3(
+		v.x ? 1 : 0,
+		v.y ? 1 : 0,
+		v.z ? 1 : 0
+	);
 }
 
 layout(local_size_x = THREADGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
@@ -68,8 +78,17 @@ void computemain() {
 		return;
 	}
 
+	int chunkIndex = (int(i) - chunksStart) / maxStarsPerChunk;
+	ivec3 chunkBufferPos = ivec3(
+		chunkIndex % chunkBufferSize.x,
+		(chunkIndex / chunkBufferSize.x) % chunkBufferSize.y,
+		(chunkIndex / chunkBufferSize.x) / chunkBufferSize.y
+	);
+
 	LightSource lightSource = lightSources[i];
-	vec3 difference = lightSource.position - cameraPosition;
+	ivec3 chunkPos = chunkBufferPos + chunkBufferSize * bvecToIvec(lessThan(chunkBufferPos, viewMinFloatLocationInChunkBuffer));
+	vec3 lightSourcePosition = chunkPos + lightSource.position;
+	vec3 difference = lightSourcePosition - cameraPosition;
 
 	float dist = length(difference);
 	vec3 direction = difference / dist;

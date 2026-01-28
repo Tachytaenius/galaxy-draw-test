@@ -63,6 +63,7 @@ local swirlAngleAtRadius = 2
 local coreProportion = 0.2
 local coreFullProportion = 0.05
 local armCount = 6
+local attenuationMultiplier = 0
 
 local function getGalaxyBoundingBoxChunks()
 	local originX, originY, originZ = 0, 0, 0
@@ -128,7 +129,7 @@ local function sendGalaxyUniforms(shader)
 	safeSend(shader, "coreProportion", coreProportion)
 	safeSend(shader, "coreFullProportion", coreFullProportion)
 	safeSend(shader, "armCount", armCount)
-	safeSend(shader, "attenuationMultiplier", 0.0001)
+	safeSend(shader, "attenuationMultiplier", attenuationMultiplier)
 
 	safeSend(shader, "nebulaCount", #nebulae)
 	safeSend(shader, "nebulaeTexture", nebulaeTexture)
@@ -168,10 +169,15 @@ local function generateChunk(chunkX, chunkY, chunkZ, chunkId, chunkBufferX, chun
 
 	local sample = getDensity(vec3.components(samplePosition))
 	local count = getStarCount(sample * consts.chunkVolume, consts.starCountVariance, starRNG)
+	local chunkShaderDistanceScale = 1 / math.max( -- used in drawing too
+		consts.chunkSize.x,
+		consts.chunkSize.y,
+		consts.chunkSize.z
+	)
 	for i = 0, count - 1 do
-		local pointPositionX = chunkPosition.x + consts.chunkSize.x * starRNG:random()
-		local pointPositionY = chunkPosition.y + consts.chunkSize.y * starRNG:random()
-		local pointPositionZ = chunkPosition.z + consts.chunkSize.z * starRNG:random()
+		local chunkLocalPosX = starRNG:random()
+		local chunkLocalPosY = starRNG:random()
+		local chunkLocalPosZ = starRNG:random()
 
 		-- Colour is dimensionless (under this model). Will learn more another time
 		local r = starRNG:random() * 0.9 + 0.1
@@ -183,15 +189,16 @@ local function generateChunk(chunkX, chunkY, chunkZ, chunkId, chunkBufferX, chun
 		g = g / max
 		b = b / max
 
-		local intensityMultiplier = (starRNG:random() * 2 - 1) * 0.9 + 1
+		local intensityMultiplier = (starRNG:random() * 2 - 1) * 0.4 + 1
+		intensityMultiplier = intensityMultiplier * chunkShaderDistanceScale ^ 2
 		local intensity = consts.intensityPerPoint * intensityMultiplier
 
 		setStarData(
 			pointIdStart + i,
 
-			pointPositionX,
-			pointPositionY,
-			pointPositionZ,
+			chunkLocalPosX,
+			chunkLocalPosY,
+			chunkLocalPosZ,
 			intensity,
 			r,
 			g,
@@ -233,13 +240,12 @@ local function handleChunkGeneration()
 	local heightChunks = maxY - minY + 1
 	local depthChunks = maxZ - minZ + 1
 
-	local viewMinX, viewMaxX, viewMinY, viewMaxY, viewMinZ, viewMaxZ = getBlockRanges(consts.chunkSize, camera.position)
-	local chunkBufferStartRealX = math.floor(viewMinX / consts.chunkRange.x) * consts.chunkRange.x
-	local chunkBufferStartRealY = math.floor(viewMinY / consts.chunkRange.y) * consts.chunkRange.y
-	local chunkBufferStartRealZ = math.floor(viewMinZ / consts.chunkRange.z) * consts.chunkRange.z
-	local viewMinXInChunkBuffer = viewMinX % consts.chunkRange.x
-	local viewMinYInChunkBuffer = viewMinY % consts.chunkRange.y
-	local viewMinZInChunkBuffer = viewMinZ % consts.chunkRange.z
+	local chunkBufferStartRealX = math.floor((camera.position.x / consts.chunkSize.x - consts.chunkRange.x / 2) / consts.chunkRange.x) * consts.chunkRange.x
+	local chunkBufferStartRealY = math.floor((camera.position.y / consts.chunkSize.y - consts.chunkRange.y / 2) / consts.chunkRange.y) * consts.chunkRange.y
+	local chunkBufferStartRealZ = math.floor((camera.position.z / consts.chunkSize.z - consts.chunkRange.z / 2) / consts.chunkRange.z) * consts.chunkRange.z
+	local viewMinXInChunkBuffer = (camera.position.x / consts.chunkSize.x - consts.chunkRange.x / 2) % consts.chunkRange.x
+	local viewMinYInChunkBuffer = (camera.position.y / consts.chunkSize.y - consts.chunkRange.y / 2) % consts.chunkRange.y
+	local viewMinZInChunkBuffer = (camera.position.z / consts.chunkSize.z - consts.chunkRange.z / 2) % consts.chunkRange.z
 	for x = 0, consts.chunkRange.x - 1 do
 		for y = 0, consts.chunkRange.y - 1 do
 			for z = 0, consts.chunkRange.z - 1 do
@@ -247,21 +253,22 @@ local function handleChunkGeneration()
 				local realY = y + chunkBufferStartRealY + (y < viewMinYInChunkBuffer and consts.chunkRange.y or 0)
 				local realZ = z + chunkBufferStartRealZ + (z < viewMinZInChunkBuffer and consts.chunkRange.z or 0)
 
-				local currentChunk = chunks[x][y][z]
-				if
-					currentChunk.x ~= realX or
-					currentChunk.y ~= realY or
-					currentChunk.z ~= realZ
-				then
-					local x2, y2, z2 = x - minX, y - minY, z - minZ
-					local chunkId = x2 + y2 * widthChunks + z2 * heightChunks * depthChunks
+				local chunkBufferIndex = x + y * consts.chunkRange.x + z * consts.chunkRange.y * consts.chunkRange.x
 
-					local chunkBufferIndex = x + y * consts.chunkRange.x + z * consts.chunkRange.y * consts.chunkRange.x
+				if
+					minX <= realX and realX <= maxX and
+					minY <= realY and realY <= maxY and
+					minZ <= realZ and realZ <= maxZ
+				then
+					local currentChunk = chunks[x][y][z]
 					if
-						minX <= x and x <= maxX and
-						minY <= y and y <= maxY and
-						minZ <= z and z <= maxZ
+						currentChunk.x ~= realX or
+						currentChunk.y ~= realY or
+						currentChunk.z ~= realZ
 					then
+						local x2, y2, z2 = realX - minX, realY - minY, realZ - minZ
+						local chunkId = x2 + y2 * widthChunks + z2 * heightChunks * depthChunks
+
 						local chunkCount = generateChunk(realX, realY, realZ, chunkId, x, y, z, chunkBufferIndex)
 						generatedChunks = generatedChunks + 1
 						local chunk = chunks[x][y][z]
@@ -270,10 +277,11 @@ local function handleChunkGeneration()
 						chunk.z = realZ
 						chunkStarCountDataFFI[chunkBufferIndex] = chunkCount
 						updateChunkStarCountBuffer = true
-					else
-						chunks[x][y][z] = {}
-						chunkStarCountDataFFI[chunkBufferIndex] = 0
 					end
+				else
+					chunks[x][y][z] = {}
+					chunkStarCountDataFFI[chunkBufferIndex] = 0
+					updateChunkStarCountBuffer = true
 				end
 			end
 		end
@@ -383,6 +391,18 @@ local function drawOutput()
 			0
 		})
 
+		blurredPointPreparationShader:send("chunkBufferSize", {vec3.components(consts.chunkRange)})
+		blurredPointPreparationShader:send("viewMinFloatLocationInChunkBuffer", {
+			(camera.position.x / consts.chunkSize.x - consts.chunkRange.x / 2) % consts.chunkRange.x,
+			(camera.position.y / consts.chunkSize.y - consts.chunkRange.y / 2) % consts.chunkRange.y,
+			(camera.position.z / consts.chunkSize.z - consts.chunkRange.z / 2) % consts.chunkRange.z
+		})
+		local chunkBufferCameraPos = vec3(
+			(camera.position.x / consts.chunkSize.x + consts.chunkRange.x / 2) % consts.chunkRange.x + consts.chunkRange.x / 2,
+			(camera.position.y / consts.chunkSize.y + consts.chunkRange.y / 2) % consts.chunkRange.y + consts.chunkRange.y / 2,
+			(camera.position.z / consts.chunkSize.z + consts.chunkRange.z / 2) % consts.chunkRange.z + consts.chunkRange.z / 2
+		)
+		blurredPointPreparationShader:send("cameraPosition", {vec3.components(chunkBufferCameraPos)})
 		local diagonalFOV = camera.verticalFOV * math.sqrt(1 ^ 2 + aspectRatio ^ 2) -- Angular distance from camera forwards at corners of screen
 		local maxAngleFromCentre = diagonalFOV / 2 + consts.pointLightBlurAngularRadius
 		blurredPointPreparationShader:send("minDot", math.cos(maxAngleFromCentre))
@@ -393,13 +413,17 @@ local function drawOutput()
 		blurredPointPreparationShader:send("maxStarsPerChunk", consts.maxStarsPerChunk) -- How many light sources wide are the chunks in the LightSources buffer
 		blurredPointPreparationShader:send("LightSources", lightSourceBuffer)
 		blurredPointPreparationShader:send("Points", blurredPointBuffer)
-		blurredPointPreparationShader:send("fadeInRadius", consts.pointFadeRadius)
-		blurredPointPreparationShader:send("fadeOutRadius", consts.cloudFadeRadius)
-		blurredPointPreparationShader:send("skyToClip", {mat4.components(skyToClip)}) -- TEMP
+		local chunkShaderDistanceScale = 1 / math.max( -- used in chunk generation too
+			consts.chunkSize.x,
+			consts.chunkSize.y,
+			consts.chunkSize.z
+		)
+		blurredPointPreparationShader:send("fadeInRadius", consts.pointFadeRadius * chunkShaderDistanceScale)
+		blurredPointPreparationShader:send("fadeOutRadius", consts.cloudFadeRadius * chunkShaderDistanceScale)
+		blurredPointPreparationShader:send("skyToClip", {mat4.components(skyToClip)})
 		blurredPointPreparationShader:send("starAttenuationTexture", starAttenuationTexture)
 		for _, group in ipairs(pointGroups) do
 			local offset = group.offset
-			blurredPointPreparationShader:send("cameraPosition", {vec3.components(camera.position + (offset or vec3()))})
 			blurredPointPreparationShader:send("pointStart", group.start)
 			blurredPointPreparationShader:send("pointCount", group.count)
 			local unreachable = group.start + group.count -- Use unreachable value for skip (one after the last element to be reached) if no skipped value specified
@@ -488,6 +512,7 @@ function love.load()
 	camera = {
 		-- position = consts.volumetricTextureSizeSpace / 2,
 		-- position = vec3(galaxyRadius / 2, 0, galaxyRadius / 2),
+		-- position = vec3(0, 0, -galaxyRadius),
 		position = vec3(),
 		-- position = vec3.clone(nebulae[1].position),
 		-- orientation = quat.fromAxisAngle(vec3(0, consts.tau / 2, 0)),
@@ -726,7 +751,9 @@ end
 function love.keypressed(key)
 	if key == "space" then
 		local prevChunkSize = consts.chunkSize
-		consts.chunkSize = consts.chunkSize * 2048
+		consts.chunkSize = consts.chunkSize * 32
+		local prevChunkVolume = consts.chunkVolume
+		consts.chunkVolume = consts.chunkSize.x * consts.chunkSize.y * consts.chunkSize.z
 		local total = 0
 		local minX, maxX, minY, maxY, minZ, maxZ = getGalaxyBoundingBoxChunks()
 		for x = minX, maxX do
@@ -737,6 +764,12 @@ function love.keypressed(key)
 					local chunkPosition = chunkCoord * consts.chunkSize
 					local samplePosition = chunkPosition + 0.5 * consts.chunkSize
 					local sample = getDensity(vec3.components(samplePosition))
+					local widthChunks = maxX - minX + 1
+					local heightChunks = maxY - minY + 1
+					local depthChunks = maxZ - minZ + 1
+					local x2, y2, z2 = x - minX, y - minY, z - minZ
+					local chunkId = x2 + y2 * widthChunks + z2 * heightChunks * depthChunks
+					starRNG:setSeed(chunkId)
 					local count = getStarCount(sample * consts.chunkVolume, consts.starCountVariance, starRNG)
 					total = total + count
 				end
@@ -744,6 +777,7 @@ function love.keypressed(key)
 		end
 		print("total stars: " .. total)
 		consts.chunkSize = prevChunkSize
+		consts.chunkVolume = prevChunkVolume
 	end
 end
 
