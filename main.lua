@@ -195,8 +195,8 @@ local function generateChunk(chunkX, chunkY, chunkZ, chunkId, chunkBufferX, chun
 		-- local intensityMultiplier = (starRNG:random() * 2 - 1) * 0.4 + 1 -- As long as the average is 1 and the intensities don't reach or pass 0 on the low end
 		-- local intensity = consts.intensityPerPoint * intensityMultiplier * chunkShaderDistanceScale ^ 2
 
-		local intensity = consts.starIntensityLowerLimit + (consts.starIntensityUpperLimit - consts.starIntensityLowerLimit) * starRNG:random() ^ consts.starDistributionRandomPower
-		intensity = intensity * chunkShaderDistanceScale ^ 2
+		local flux = consts.starLuminousFluxLowerLimit + (consts.starLuminousFluxUpperLimit - consts.starLuminousFluxLowerLimit) * starRNG:random() ^ consts.starDistributionRandomPower
+		flux = flux * chunkShaderDistanceScale ^ 2 -- Probably not the right place for the unit conversion...
 
 		setStarData(
 			pointIdStart + i,
@@ -204,7 +204,7 @@ local function generateChunk(chunkX, chunkY, chunkZ, chunkId, chunkBufferX, chun
 			chunkLocalPosX,
 			chunkLocalPosY,
 			chunkLocalPosZ,
-			intensity,
+			flux,
 			r,
 			g,
 			b
@@ -377,7 +377,7 @@ local function drawOutput()
 		love.graphics.dispatchThreadgroups(starAttenuationShader, xCount, yCount, 1)
 
 		local distanceToSphere = 1 - math.cos(consts.pointLightBlurAngularRadius) -- Unit sphere spherical cap height from angular radius
-		local diskArea = consts.tau * distanceToSphere
+		local diskSolidAngle = consts.tau * distanceToSphere
 		local scaleToGetAngularRadius = math.tan(consts.pointLightBlurAngularRadius)
 		local cameraUp = mathsies.vec3.rotate(consts.upVector, camera.orientation)
 		local cameraRight = mathsies.vec3.rotate(consts.rightVector, camera.orientation)
@@ -396,6 +396,7 @@ local function drawOutput()
 			0
 		})
 
+		blurredPointPreparationShader:send("luminanceCalculationConstant", 1 / (diskSolidAngle * 2 * consts.tau))
 		blurredPointPreparationShader:send("chunkBufferSize", {vec3.components(consts.chunkRange)})
 		blurredPointPreparationShader:send("viewMinFloatLocationInChunkBuffer", {
 			(camera.position.x / consts.chunkSize.x - consts.chunkRange.x / 2) % consts.chunkRange.x,
@@ -440,7 +441,6 @@ local function drawOutput()
 		blurredPointInstanceShader:send("Points", blurredPointBuffer)
 		blurredPointInstanceShader:send("diskDistanceToSphere", distanceToSphere)
 		blurredPointInstanceShader:send("scale", scaleToGetAngularRadius)
-		blurredPointInstanceShader:send("diskArea", diskArea)
 		blurredPointInstanceShader:send("cameraUp", {mathsies.vec3.components(cameraUp)})
 		blurredPointInstanceShader:send("cameraRight", {mathsies.vec3.components(cameraRight)})
 		blurredPointInstanceShader:send("skyToClip", {mathsies.mat4.components(skyToClip)})

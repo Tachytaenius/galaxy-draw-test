@@ -10,7 +10,6 @@ varying vec3 colour;
 // These depend on angular radius
 uniform float diskDistanceToSphere;
 uniform float scale;
-uniform float diskArea;
 
 #ifdef VERTEX
 
@@ -68,7 +67,7 @@ out vec4 outColour;
 void pixelmain() {
 	// float fadeMultiplier = 1.0 - fade;
 	float fadeMultiplier = 1.0;
-	outColour = fadeMultiplier * vec4(colour / diskArea, 1.0);
+	outColour = fadeMultiplier * vec4(colour, 1.0);
 }
 
 #endif

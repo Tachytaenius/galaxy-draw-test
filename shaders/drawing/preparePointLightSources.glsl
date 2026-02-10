@@ -6,7 +6,7 @@ uniform int chunksStart;
 
 struct LightSource {
 	vec3 position;
-	float luminousIntensity;
+	float luminousFlux;
 	vec3 colour;
 };
 readonly buffer LightSources {
@@ -39,6 +39,7 @@ uniform mat4 skyToClip;
 uniform sampler3D starAttenuationTexture;
 uniform ivec3 chunkBufferSize;
 uniform vec3 viewMinFloatLocationInChunkBuffer;
+uniform float luminanceCalculationConstant;
 
 uniform float fadeInRadius;
 uniform float fadeOutRadius;
@@ -105,7 +106,7 @@ void computemain() {
 		0.0, 1.0
 	);
 
-	float luminance = lightSource.luminousIntensity / dist2;
+	float luminance = lightSource.luminousFlux / dist2 * luminanceCalculationConstant; // Luminance within the star's spherical cap on the celestial sphere. All combined, it should be flux / (dist^2 * 4pi * diskSolidAngle), where flux / (dist^2 * 4pi) takes it from luminous flux to luminous exitance (I think) and then the exitance divided by the disk solid angle gets you the luminance. I think.
 	vec3 incomingLightPreExtinction = luminance * lightSource.colour * pointFadeMultiplier;
 	vec3 clipSpacePos = perspectiveDivide(skyToClip * vec4(direction, 1.0));
 	vec3 textureSamplePos = clipSpacePos;
