@@ -23,7 +23,7 @@ local cloudShader
 local nebulaeTexture
 local createNebulaShader
 local nebulae
-local nebulaeBuffer
+local nebulaeBufferScaled
 
 local blurredPointPreparationShader
 local blurredPointInstanceShader
@@ -33,6 +33,7 @@ local lightSourceBuffer
 local starAttenuationTexture
 local starAttenuationShader
 local pointIndirectDrawArgsBuffer
+local brightnessMultiplyShader
 
 local chunks
 local chunkStarCountBuffer
@@ -49,21 +50,22 @@ local mode
 local starRNG
 
 -- TODO: Move all to consts...
-local squashAmount = 0.03
-local nebulaSquashAmount = 0.03
-local galaxyRadius = 900
-local haloProportion = 0.0005
+local squashAmount = 0.015
+local nebulaSquashAmount = 0.015
+local galaxyRadius = 4e20
+local haloProportion = 0.0001
 local galaxyForwards = vec3(0, 1, 0)
 local galaxyUp = vec3(0, 0, 1)
 local galaxyRight = vec3.cross(galaxyForwards, galaxyUp)
-local intensityPerStar = consts.intensityPerPoint
 local stellarDensityMultiplier = consts.stellarDensityMultiplier
 local stellarDensityCurvePower = 1
-local swirlAngleAtRadius = 2
+local swirlAngleAtRadius = 3
 local coreProportion = 0.2
 local coreFullProportion = 0.05
-local armCount = 6
-local attenuationMultiplier = 0
+local armCount = 8
+local attenuationMultiplier = 2.5e-20 -- In reciprocal metres. Converted from "1.8 magnitudes per kiloparsec"
+
+local galaxyUnitsScale = 1 / galaxyRadius -- Derived
 
 local function getGalaxyBoundingBoxChunks()
 	local originX, originY, originZ = 0, 0, 0
@@ -116,24 +118,25 @@ local function safeSend(shader, uniform, ...)
 end
 
 local function sendGalaxyUniforms(shader)
+	local scale = galaxyUnitsScale
 	safeSend(shader, "squashAmount", squashAmount)
-	safeSend(shader, "galaxyRadius", galaxyRadius)
+	safeSend(shader, "galaxyRadius", galaxyRadius * scale)
 	safeSend(shader, "haloProportion", haloProportion)
 	safeSend(shader, "galaxyForwards", {vec3.components(galaxyForwards)})
 	safeSend(shader, "galaxyUp", {vec3.components(galaxyUp)})
 	safeSend(shader, "galaxyRight", {vec3.components(galaxyRight)})
-	safeSend(shader, "intensityPerStar", intensityPerStar)
-	safeSend(shader, "stellarDensityMultiplier", stellarDensityMultiplier)
+	safeSend(shader, "intensityPerStar", consts.intensityPerPoint * scale ^ 2)
+	safeSend(shader, "stellarDensityMultiplier", stellarDensityMultiplier / scale ^ 3)
 	safeSend(shader, "stellarDensityCurvePower", stellarDensityCurvePower)
 	safeSend(shader, "swirlAngleAtRadius", swirlAngleAtRadius)
 	safeSend(shader, "coreProportion", coreProportion)
 	safeSend(shader, "coreFullProportion", coreFullProportion)
 	safeSend(shader, "armCount", armCount)
-	safeSend(shader, "attenuationMultiplier", attenuationMultiplier)
+	safeSend(shader, "attenuationMultiplier", attenuationMultiplier / scale)
 
 	safeSend(shader, "nebulaCount", #nebulae)
 	safeSend(shader, "nebulaeTexture", nebulaeTexture)
-	safeSend(shader, "Nebulae", nebulaeBuffer)
+	safeSend(shader, "Nebulae", nebulaeBufferScaled)
 end
 
 local function getStarCount(average, variance, rng) -- Average can be a float! This function is uniform-ish. It returns numbers with the desired average
@@ -189,9 +192,11 @@ local function generateChunk(chunkX, chunkY, chunkZ, chunkId, chunkBufferX, chun
 		g = g / max
 		b = b / max
 
-		local intensityMultiplier = (starRNG:random() * 2 - 1) * 0.4 + 1
-		intensityMultiplier = intensityMultiplier * chunkShaderDistanceScale ^ 2
-		local intensity = consts.intensityPerPoint * intensityMultiplier
+		-- local intensityMultiplier = (starRNG:random() * 2 - 1) * 0.4 + 1 -- As long as the average is 1 and the intensities don't reach or pass 0 on the low end
+		-- local intensity = consts.intensityPerPoint * intensityMultiplier * chunkShaderDistanceScale ^ 2
+
+		local intensity = consts.starIntensityLowerLimit + (consts.starIntensityUpperLimit - consts.starIntensityLowerLimit) * starRNG:random() ^ consts.starDistributionRandomPower
+		intensity = intensity * chunkShaderDistanceScale ^ 2
 
 		setStarData(
 			pointIdStart + i,
@@ -342,14 +347,14 @@ local function drawOutput()
 
 		love.graphics.setShader(cloudShader)
 		sendGalaxyUniforms(cloudShader)
-		cloudShader:send("fadeInRadius", consts.pointFadeRadius)
-		cloudShader:send("fadeOutRadius", consts.cloudFadeRadius)
+		cloudShader:send("fadeInRadius", consts.pointFadeRadius * galaxyUnitsScale)
+		cloudShader:send("fadeOutRadius", consts.cloudFadeRadius * galaxyUnitsScale)
 		cloudShader:send("clipToSky", {mat4.components(clipToSky)})
-		cloudShader:send("cameraPosition", {vec3.components(camera.position)})
+		cloudShader:send("cameraPosition", {vec3.components(camera.position * galaxyUnitsScale)})
 		-- cloudShader:send("attenuation", attenuationTexture)
 		-- cloudShader:send("textureSize", {vec3.components(consts.volumetricTextureSizeSpace)})
 		-- cloudShader:send("emission", emissionTexture)
-		cloudShader:send("rayLength", consts.rayLength)
+		cloudShader:send("rayLength", consts.rayLength * galaxyUnitsScale)
 		cloudShader:send("rayStepCount", consts.rayStepCount)
 		cloudShader:send("nebulaStepCount", consts.nebulaStepCount)
 		love.graphics.draw(dummyTexture, 0, 0, 0, love.graphics.getCanvas():getDimensions())
@@ -360,10 +365,10 @@ local function drawOutput()
 		love.graphics.clear(0, 0, 0, 1)
 
 		sendGalaxyUniforms(starAttenuationShader)
-		starAttenuationShader:send("rayLength", consts.cloudFadeRadius)
+		starAttenuationShader:send("rayLength", consts.cloudFadeRadius * galaxyUnitsScale)
 		starAttenuationShader:send("textureSize", {starAttenuationTexture:getWidth(), starAttenuationTexture:getHeight(), starAttenuationTexture:getDepth()})
 		starAttenuationShader:send("clipToSky", {mat4.components(clipToSky)})
-		starAttenuationShader:send("cameraPosition", {vec3.components(camera.position)})
+		starAttenuationShader:send("cameraPosition", {vec3.components(camera.position * galaxyUnitsScale)})
 		starAttenuationShader:send("resultTexture", starAttenuationTexture)
 		local xSize, ySize = starAttenuationShader:getLocalThreadgroupSize()
 		local w, h = starAttenuationTexture:getDimensions()
@@ -448,8 +453,8 @@ local function drawOutput()
 	end
 
 	love.graphics.setBlendMode("add")
-	love.graphics.setShader()
-
+	love.graphics.setShader(brightnessMultiplyShader)
+	brightnessMultiplyShader:send("multiplier", consts.outputLuminanceMultiplier)
 	love.graphics.setCanvas(outputCanvas)
 	love.graphics.clear(0, 0, 0, 1)
 	love.graphics.draw(cloudCanvas, 0, 0, 0, outputCanvas:getWidth() / cloudCanvas:getWidth(), outputCanvas:getHeight() / cloudCanvas:getHeight())
@@ -457,6 +462,7 @@ local function drawOutput()
 
 	love.graphics.setBlendMode("alpha")
 	love.graphics.setCanvas()
+	love.graphics.setShader()
 end
 
 local function getAverage(modeName)
@@ -518,7 +524,7 @@ function love.load()
 		-- orientation = quat.fromAxisAngle(vec3(0, consts.tau / 2, 0)),
 		orientation = quat(),
 		verticalFOV = math.rad(90),
-		speed = 1,
+		speed = 1e17,
 		angularSpeed = 1,
 		farPlaneDistance = 2048,
 		nearPlaneDistance = 0.125
@@ -527,10 +533,10 @@ function love.load()
 	starRNG = love.math.newRandomGenerator()
 
 	dummyTexture = love.graphics.newImage(love.image.newImageData(1, 1))
-	starCanvas = love.graphics.newCanvas(math.floor(love.graphics.getWidth() * consts.starCanvasScale), math.floor(love.graphics.getHeight() * consts.starCanvasScale), {format = "rgba16f"})
+	starCanvas = love.graphics.newCanvas(math.floor(love.graphics.getWidth() * consts.starCanvasScale), math.floor(love.graphics.getHeight() * consts.starCanvasScale), {format = "rgba16f", debugname = "Star Canvas"})
 	-- starCanvas:setFilter("nearest", "nearest")
-	cloudCanvas = love.graphics.newCanvas(math.floor(love.graphics.getWidth() * consts.cloudCanvasScale), math.floor(love.graphics.getHeight() * consts.cloudCanvasScale), {format = "rgba16f"})
-	outputCanvas = love.graphics.newCanvas(love.graphics.getWidth(), love.graphics.getHeight(), {format = "rgba32f"})
+	cloudCanvas = love.graphics.newCanvas(math.floor(love.graphics.getWidth() * consts.cloudCanvasScale), math.floor(love.graphics.getHeight() * consts.cloudCanvasScale), {format = "rgba16f", debugname = "Volumetrics Canvas"})
+	outputCanvas = love.graphics.newCanvas(love.graphics.getWidth(), love.graphics.getHeight(), {format = "rgba16f", debugname = "Output Canvas"})
 	local attenuationTextureScale = 0.25
 	starAttenuationTexture = love.graphics.newCanvas(
 		math.floor(love.graphics.getWidth() * attenuationTextureScale),
@@ -567,18 +573,19 @@ function love.load()
 		"#line 1\n" .. love.filesystem.read("shaders/init/createNebula.glsl")
 	)
 
-	nebulaeBuffer = love.graphics.newBuffer(consts.nebulaeBufferFormat, consts.maxNebulae, {shaderstorage = true})
+	nebulaeBufferScaled = love.graphics.newBuffer(consts.nebulaeBufferFormat, consts.maxNebulae, {shaderstorage = true})
 	local bufferData = {}
 	for _, nebula in ipairs(nebulae) do
 		table.insert(bufferData, {
-			nebula.position.x, nebula.position.y, nebula.position.z,
-			nebula.size.x, nebula.size.y, nebula.size.z,
+			nebula.position.x * galaxyUnitsScale, nebula.position.y * galaxyUnitsScale, nebula.position.z * galaxyUnitsScale,
+			nebula.size.x * galaxyUnitsScale, nebula.size.y * galaxyUnitsScale, nebula.size.z * galaxyUnitsScale
 		})
 	end
 	if #nebulae > 0 then
-		nebulaeBuffer:setArrayData(bufferData)
+		nebulaeBufferScaled:setArrayData(bufferData)
 	end
 
+	createNebulaShader:send("attenuationConversionFactor", attenuationMultiplier * 150 / galaxyUnitsScale)
 	createNebulaShader:send("nebulaeTexture", nebulaeTexture)
 	createNebulaShader:send("nebulaTextureResolution", consts.nebulaResolution)
 	local sizeX, sizeY, sizeZ = createNebulaShader:getLocalThreadgroupSize()
@@ -587,8 +594,8 @@ function love.load()
 	local countZ = math.ceil(consts.nebulaResolution / sizeZ)
 	for _, nebula in ipairs(nebulae) do
 		createNebulaShader:send("nebulaId", nebula.id)
-		createNebulaShader:send("nebulaPosition", {vec3.components(nebula.position)})
-		safeSend(createNebulaShader, "nebulaSize", {vec3.components(nebula.size)})
+		createNebulaShader:send("nebulaPosition", {vec3.components(nebula.position * galaxyUnitsScale)})
+		safeSend(createNebulaShader, "nebulaSize", {vec3.components(nebula.size * galaxyUnitsScale)})
 		love.graphics.dispatchThreadgroups(createNebulaShader, countX, countY, countZ)
 	end
 
@@ -634,6 +641,8 @@ function love.load()
 			MAX_NEBULAE = consts.maxNebulae
 		}}
 	)
+
+	brightnessMultiplyShader = love.graphics.newShader("shaders/drawing/brightnessMultiply.glsl")
 
 	-- cloudTextureViews = {}
 
@@ -751,13 +760,13 @@ end
 function love.keypressed(key)
 	if key == "space" then
 		local prevChunkSize = consts.chunkSize
-		consts.chunkSize = consts.chunkSize * 32
+		consts.chunkSize = consts.chunkSize * 16
 		local prevChunkVolume = consts.chunkVolume
 		consts.chunkVolume = consts.chunkSize.x * consts.chunkSize.y * consts.chunkSize.z
 		local total = 0
 		local minX, maxX, minY, maxY, minZ, maxZ = getGalaxyBoundingBoxChunks()
 		for x = minX, maxX do
-			print(x - minX, maxX - minX)
+			print(x - minX .. "/" .. maxX - minX)
 			for y = minY, maxY do
 				for z = minZ, maxZ do
 					local chunkCoord = vec3(x, y, z)
@@ -775,7 +784,19 @@ function love.keypressed(key)
 				end
 			end
 		end
-		print("total stars: " .. total)
+		print("total stars: " .. total .. ", order " .. math.log10(total))
+
+		local data = love.graphics.readbackTexture(outputCanvas)
+		local total, num = 0, 0 -- Luminance total across pixels, not star count total
+		for x = 0, data:getWidth() - 1 do
+			for y = 0, data:getHeight() - 1 do
+				local r, g, b, a = data:getPixel(x, y)
+				total = total + r
+				num = num + 1
+			end
+		end
+		print("average luminance on screen: " .. (total / num / consts.outputLuminanceMultiplier) .. ", order " .. math.log10(total / num / consts.outputLuminanceMultiplier))
+
 		consts.chunkSize = prevChunkSize
 		consts.chunkVolume = prevChunkVolume
 	end
@@ -801,7 +822,7 @@ function love.update(dt)
 	if love.keyboard.isDown(consts.controls.moveBackwards) then
 		translation = translation - consts.forwardVector
 	end
-	local speed = camera.speed * (love.keyboard.isDown("lshift") and 50 or love.keyboard.isDown("lctrl") and 0.05 or 1)
+	local speed = camera.speed * (love.keyboard.isDown("lshift") and 500 or love.keyboard.isDown("lctrl") and 0.05 or 1)
 	camera.position = camera.position + vec3.rotate(util.normaliseOrZero(translation), camera.orientation) * speed * dt
 
 	local rotation = vec3()

@@ -30,22 +30,31 @@ consts.starAttenuationTextureSteps = 48
 
 consts.maxNebulae = 8
 consts.nebulaResolution = 48
-consts.minNebulaSize = 2
-consts.maxNebulaSize = 10
+consts.minNebulaSize = 2e18
+consts.maxNebulaSize = 1e19
 
-consts.rayLength = 2000
-consts.rayStepCount = 96
+consts.rayLength = 4e20*2.5
+consts.rayStepCount = 128
 consts.nebulaStepCount = 32
 consts.volumetricsCanvasFilter = "linear"
 
 consts.starCountVariance = 0 -- Nonzero creates a blocky "texture" in the distribution of stars
 consts.pointLightComputeThreadgroupSize = 64
 
-consts.stellarDensityMultiplier = 7.5
+consts.stellarDensityMultiplier = 4.72e-51 -- Stellar density near the sun
 
-consts.chunkSize = vec3(4)
-consts.pointSetFreeRangeMultiplier = 1.2 -- Must be >= 1
-consts.intensityPerPoint = 0.0001
+consts.chunkSize = vec3(4e17)
+
+consts.starLuminousFluxUpperLimit = 3.75e28 -- Luminous flux of the sun
+consts.starLuminousFluxLowerLimit = 4.33e26 -- Red dwarf stars have luminosities in the range of 0.0003 to 0.07 times that of the sun. We pick the middle, then multiply it by a red dwarf luminous efficacy figure I found of 32.2 lm/W. Thus, average red dwarf star luminous flux (maybe)
+consts.starDistributionRandomPower = 10 -- Higher numbers bias towards lower limit. The limits can be swapped around
+
+-- Derived
+consts.starIntensityUpperLimit = consts.starLuminousFluxUpperLimit / (consts.tau * 2)
+consts.starIntensityLowerLimit = consts.starLuminousFluxLowerLimit / (consts.tau * 2)
+-- Point intensity is lower + (upper - lower) * random ^ power, so this is the average:
+consts.intensityPerPoint = consts.starIntensityLowerLimit + (consts.starIntensityUpperLimit - consts.starIntensityLowerLimit) / (consts.starDistributionRandomPower + 1)
+
 consts.diskMeshVertices = 5
 consts.pointLightBlurAngularRadius = 0.005
 -- Derived
@@ -53,10 +62,12 @@ consts.chunkVolume = consts.chunkSize.x * consts.chunkSize.y * consts.chunkSize.
 consts.maxStarsPerChunk = math.ceil(consts.chunkVolume * (1 + consts.starCountVariance) * consts.stellarDensityMultiplier) + 1 -- + 1 for the random in getStarCount, just in case
 
 consts.starCanvasScale = 1
-consts.cloudCanvasScale = 1
+consts.cloudCanvasScale = 0.75
 
-consts.pointFadeRadius = 22
-consts.cloudFadeRadius = 24
+consts.cloudFadeRadius = consts.chunkSize.x * 8
+consts.pointFadeRadius = consts.cloudFadeRadius * 0.9
+
+consts.outputLuminanceMultiplier = 1 / 0.0005
 
 -- Derived
 consts.chunkRange = vec3(

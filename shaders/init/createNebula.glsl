@@ -6,6 +6,8 @@ uniform int nebulaId;
 uniform vec3 nebulaPosition;
 uniform vec3 nebulaSize; // Spatially, not in pixels
 
+uniform float attenuationConversionFactor;
+
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 void computemain() {
 	ivec3 whd = ivec3(nebulaTextureResolution);
@@ -33,6 +35,8 @@ void computemain() {
 		pow(max(0.0, noiseValue), 2.5) * strength +
 		pow(max(0.0, fadeout), 2.0) * 1.5
 	);
+
+	attenuation *= attenuationConversionFactor;
 
 	imageStore(nebulaeTexture, writePos, vec4(attenuation, 0.0, 0.0, 1.0));
 }
